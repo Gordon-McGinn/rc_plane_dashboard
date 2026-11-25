@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RC Plane Flight Log</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600&family=Barlow+Condensed:wght@500;700&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.4/mqtt.min.js"></script>
+<style>
+:root{--bg:#dbe9fb;--panel:#f2f7ff;--ink:#0a1f44;--mute:#4a638c;--line:#b3c9ea;--sky:#8ec5e0;--gnd:#9a7b52;--hi:#ffd23f;
+--c1:#0b4fc4;--c2:#2f8cff;--c3:#0a2a6b;--c4:#1b8a4b;--c5:#c4308a;--c6:#3a7ca5;
+--font:Barlow,system-ui,sans-serif;--num:'Barlow Condensed',Barlow,system-ui,sans-serif}
+@media(prefers-color-scheme:dark){:root{--bg:#08162e;--panel:#0e2347;--ink:#e6f0ff;--mute:#8fa9d1;--line:#1f3d6e;--sky:#2f6f93;--gnd:#6d5334;
+--c1:#5aa9ff;--c2:#8cc8ff;--c3:#3d7dff;--c4:#5fd48b;--c5:#f06cbc;--c6:#6fb0d8}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 var(--font)}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line)}
+h1{font:700 26px var(--num);margin:0 12px 0 0;letter-spacing:.02em}
+.in,.btn,select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 11px}
+.in{width:170px}.btn{cursor:pointer}.btn:hover{border-color:var(--ink)}
+.btn.go,.btn[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+:focus-visible{outline:2px solid var(--c1);outline-offset:2px}
+#status{margin-left:auto;color:var(--mute);font-size:14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
+.stats div{background:var(--bg);padding:10px 20px}
+.stats b{display:block;font:700 32px/1 var(--num)}.stats span{color:var(--mute);font-size:13px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;padding:14px 20px 0}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.card h2{display:flex;align-items:baseline;gap:6px;font:600 14px var(--font);margin:0 0 4px;color:var(--mute)}
+.card h2 i{font-style:normal}
+.card h2 b{margin-left:auto;font:700 20px/1 var(--num);color:var(--ink)}
+.mapcard{position:relative;padding:0;overflow:hidden}
+#map{height:clamp(320px,54vh,600px);z-index:0;background:var(--panel)}
+#map canvas#c-trk{width:100%;height:100%;display:block}
+#empty{position:absolute;inset:0;z-index:1;display:grid;place-items:center;text-align:center;padding:24px;color:var(--mute);background:color-mix(in srgb,var(--panel) 88%,transparent)}
+#empty[hidden]{display:none}
+.plane svg{display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))}
+.leaflet-container{font-family:var(--font)}
+#c-hor{width:100%;height:190px;display:block}
+.rd{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-top:8px}
+.rd div{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding:2px 0}
+.rd span{color:var(--mute)}.rd b{font:500 18px var(--num);white-space:nowrap}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;padding:14px 20px}
+canvas.ch{width:100%;height:130px;display:block;cursor:crosshair;touch-action:none}
+.bar{position:sticky;bottom:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px 20px;background:var(--panel);border-top:1px solid var(--line)}
+.play{width:44px;height:44px;border-radius:50%;border:0;background:var(--ink);color:var(--bg);cursor:pointer;display:grid;place-items:center;flex:none}
+.play svg{width:18px;height:18px;fill:currentColor}
+#clock{font:700 22px var(--num);min-width:108px}
+#scrub{flex:1;min-width:160px;accent-color:var(--c1)}
+.bar label{color:var(--mute);font-size:14px;display:flex;align-items:center;gap:6px}
+select{padding:6px 8px}
+</style></head><body>
+<header>
+<h1>RC plane flight log</h1>
+<input class="in" id="topic" value="rc-k7f3q9x2" aria-label="MQTT topic" title="Must match TOPIC in the Arduino sketch">
+<button class="btn go" id="btn-conn">Connect</button>
+<button class="btn" id="btn-req">Request flight log</button>
+<button class="btn" id="btn-demo">Demo flight</button>
+<button class="btn" id="btn-load">Open CSV</button>
+<button class="btn" id="btn-csv">Export CSV</button>
+<input type="file" id="file" accept=".csv,text/csv" hidden>
+<span id="status">Not connected</span>
+</header>
+<section class="stats" id="stats"></section>
+<main>
+<div class="card mapcard"><div id="map"></div><div id="empty">No flight loaded yet. Connect and request the log, open a saved CSV, or run the demo flight.</div></div>
+<aside class="card"><h2>Attitude</h2><canvas id="c-hor"></canvas><div class="rd" id="rd"></div></aside>
+</main>
+<section class="charts">
+<div class="card"><h2>Altitude above launch <i>m</i><b id="v-c-alt"></b></h2><canvas class="ch" id="c-alt"></canvas></div>
+<div class="card"><h2>GPS speed <i>km/h</i><b id="v-c-spd"></b></h2><canvas class="ch" id="c-spd"></canvas></div>
+<div class="card"><h2>G-force <i>g</i><b id="v-c-g"></b></h2><canvas class="ch" id="c-g"></canvas></div>
+<div class="card"><h2>Pitch <i style="color:var(--c4)">&#9632;</i> and roll <i style="color:var(--c5)">&#9632;</i> <i>degrees</i><b id="v-c-att"></b></h2><canvas class="ch" id="c-att"></canvas></div>
+<div class="card"><h2>Temperature <i>°C</i><b id="v-c-tmp"></b></h2><canvas class="ch" id="c-tmp"></canvas></div>
+</section>
+<div class="bar">
+<button class="play" id="play" aria-label="Play" title="Play or pause (Space)"></button>
+<span id="clock">0:00 / 0:00</span>
+<input type="range" id="scrub" min="0" max="0" value="0" step="50" aria-label="Flight time">
+<label>Speed <select id="rate"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select></label>
+<button class="btn" id="follow" aria-pressed="false" title="Keep the map centred on the plane">Follow plane</button>
+<button class="btn" id="fit" title="Zoom the map to the whole track">Whole track</button>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const F=['t','alt','pres','temp','ax','ay','az','pitch','roll','lat','lon','spd','hdg','sats'];
+const NUM=['alt','pres','temp','pitch','spd','g','pla','plo'];
+const PLAY='<svg viewBox="0 0 20 20"><path d="M5 2.5v15l13-7.5z"/></svg>',PAUSE='<svg viewBox="0 0 20 20"><path d="M4 2.5h4.5v15H4zM11.5 2.5H16v15h-4.5z"/></svg>';
+const PLANE='<svg viewBox="0 0 40 40" width="40" height="40"><path d="M20 3l3 12 14 7v3l-14-3-1 10 5 3v2l-7-1.5-7 1.5v-2l5-3-1-10-14 3v-3l14-7z" fill="#ffd23f" stroke="#0a1f44" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+let D=[],T0=0,T1=0,playT=0,playing=false,rate=1,last=0,raf=0,cl=null,follow=false,hasGps=false;
+let map,lFull,lCase,lFlown,mk,pts=[];
+const cache={};
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const CH=[['c-alt',[['alt','--c1']],1],['c-spd',[['spd','--c2']],0],['c-g',[['g','--c3']],2],['c-att',[['pitch','--c4'],['roll','--c5']],0],['c-tmp',[['temp','--c6']],1]];
+const ok=()=>D.length>1;
+const st=t=>$('status').textContent=t;
+const mmss=ms=>{const s=Math.max(0,ms)/1000;return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')};
+const turn=(a,b,f)=>a+(((b-a)%360+540)%360-180)*f;
+
+/* ---------- data ---------- */
+function parse(txt){for(const l of txt.split('\n')){const p=l.trim().split(',').map(Number);if(p.length!==F.length||!p.every(isFinite))continue;const o={};F.forEach((k,i)=>o[k]=p[i]);o.g=Math.hypot(o.ax,o.ay,o.az);D.push(o)}}
+function loaded(msg){
+ stop();dirty();
+ if(ok()){
+  const f=D.find(d=>d.lat&&d.lon);hasGps=!!f;let la=f?f.lat:0,lo=f?f.lon:0,n=0;
+  D.forEach(d=>{if(d.lat&&d.lon){la=d.lat;lo=d.lon;n++}d.pla=la;d.plo=lo;d.gi=n});
+  T0=D[0].t;T1=D[D.length-1].t}else{hasGps=false;T0=T1=0}
+ playT=T0;$('scrub').max=T1-T0;
+ const e=$('empty');e.hidden=ok()&&hasGps;if(ok()&&!hasGps)e.textContent='This log has no GPS fix, so there is no track to show. The charts and attitude still play back.';
+ stats();mapLoad();draw();if(msg)st(msg)}
+function at(t){
+ let a=0,b=D.length-1;while(b-a>1){const m=(a+b)>>1;D[m].t<=t?a=m:b=m}
+ const p=D[a],q=D[b],f=Math.max(0,Math.min(1,(t-p.t)/((q.t-p.t)||1))),o={i:f>=1?b:a,t,sats:p.sats};
+ for(const k of NUM)o[k]=p[k]+(q[k]-p[k])*f;
+ o.hdg=(turn(p.hdg,q.hdg,f)%360+360)%360;o.roll=((turn(p.roll,q.roll,f)+180)%360+360)%360-180;return o}
+
+/* ---------- charts ---------- */
+const PL=42,PR=10,PT=8,PB=18;
+function dirty(){for(const k in cache)delete cache[k]}
+function build(id,ser){
+ const c=$(id),r=c.getBoundingClientRect(),d=devicePixelRatio||1,W=r.width,H=r.height;c.width=W*d;c.height=H*d;
+ const off=document.createElement('canvas');off.width=c.width;off.height=c.height;
+ const x=off.getContext('2d');x.setTransform(d,0,0,d,0,0);x.font='12px '+css('--font');x.fillStyle=css('--mute');
+ const g=cache[id]={off,d,W,H};
+ if(!ok()){x.fillText('No data yet',PL,H/2);return g}
+ let lo=1e9,hi=-1e9;ser.forEach(([k])=>D.forEach(v=>{lo=Math.min(lo,v[k]);hi=Math.max(hi,v[k])}));
+ if(hi-lo<1e-6){hi+=1;lo-=1}const p=(hi-lo)*.08;lo-=p;hi+=p;
+ const X=g.X=t=>PL+(t-T0)/((T1-T0)||1)*(W-PL-PR),Y=g.Y=v=>PT+(1-(v-lo)/(hi-lo))*(H-PT-PB);
+ x.lineWidth=1;x.strokeStyle=css('--line');x.textAlign='right';
+ for(let i=0;i<=4;i++){const v=lo+(hi-lo)*i/4,y=Y(v);x.beginPath();x.moveTo(PL,y);x.lineTo(W-PR,y);x.stroke();x.fillText(v.toFixed(hi-lo<1?2:hi-lo<10?1:0),PL-5,y+4)}
+ for(let i=0;i<=4;i++)x.textAlign=i==4?'right':i?'center':'left',x.fillText(mmss((T1-T0)*i/4),PL+(W-PL-PR)*i/4,H-3);
+ ser.forEach(([k,c])=>{x.strokeStyle=css(c);x.lineWidth=1.8;x.lineJoin='round';x.beginPath();D.forEach((v,i)=>i?x.lineTo(X(v.t),Y(v[k])):x.moveTo(X(v.t),Y(v[k])));x.stroke()});
+ return g}
+function chart(id,ser,dp,s){
+ const c=$(id),g=cache[id]||build(id,ser),x=c.getContext('2d');
+ x.setTransform(1,0,0,1,0,0);x.clearRect(0,0,c.width,c.height);if(g.off.width)x.drawImage(g.off,0,0);
+ if(!s||!g.X){$('v-'+id).textContent='';return}
+ x.setTransform(g.d,0,0,g.d,0,0);const cx=g.X(s.t);
+ x.strokeStyle=css('--ink');x.lineWidth=1;x.beginPath();x.moveTo(cx,PT);x.lineTo(cx,g.H-PB);x.stroke();
+ ser.forEach(([k,col])=>{x.fillStyle=css(col);x.strokeStyle=css('--panel');x.lineWidth=2;x.beginPath();x.arc(cx,g.Y(s[k]),4.5,0,7);x.fill();x.stroke()});
+ $('v-'+id).textContent=ser.map(([k])=>s[k].toFixed(dp)).join(' / ')}
+
+/* ---------- attitude ---------- */
+function horizon(s){
+ const c=$('c-hor'),r=c.getBoundingClientRect(),dp=devicePixelRatio||1,W=r.width,H=r.height;c.width=W*dp;c.height=H*dp;
+ const x=c.getContext('2d');x.setTransform(dp,0,0,dp,0,0);const d=s||{pitch:0,roll:0},cx=W/2,cy=H/2,k=H/60;
+ x.save();x.beginPath();x.arc(cx,cy,H/2-4,0,7);x.clip();
+ x.translate(cx,cy);x.rotate(-d.roll*Math.PI/180);x.translate(0,d.pitch*k);
+ x.fillStyle=css('--sky');x.fillRect(-W,-H*3,W*2,H*3);x.fillStyle=css('--gnd');x.fillRect(-W,0,W*2,H*3);
+ x.strokeStyle='#fff';x.lineWidth=2;x.beginPath();x.moveTo(-W,0);x.lineTo(W,0);x.stroke();
+ x.lineWidth=1;for(let p=-30;p<=30;p+=10){if(!p)continue;x.beginPath();x.moveTo(-18,-p*k);x.lineTo(18,-p*k);x.stroke()}
+ x.restore();x.strokeStyle=css('--ink');x.lineWidth=2.5;x.beginPath();x.arc(cx,cy,H/2-4,0,7);x.stroke();
+ x.strokeStyle=css('--hi');x.lineWidth=3;x.beginPath();x.moveTo(cx-40,cy);x.lineTo(cx-12,cy);x.lineTo(cx,cy+8);x.lineTo(cx+12,cy);x.lineTo(cx+40,cy);x.stroke()}
+function readouts(s){
+ if(!s){$('rd').innerHTML='';return}
+ const p=at(Math.max(T0,s.t-1000)),vs=(s.alt-p.alt)/(((s.t-p.t)/1000)||1);
+ const r=[['Altitude',s.alt.toFixed(1)+' m'],['Climb',vs.toFixed(1)+' m/s'],['Speed',s.spd.toFixed(0)+' km/h'],['G-force',s.g.toFixed(2)+' g'],
+ ['Heading',s.hdg.toFixed(0)+'°'],['Pitch',s.pitch.toFixed(0)+'°'],['Roll',s.roll.toFixed(0)+'°'],['Temp',s.temp.toFixed(1)+' °C'],
+ ['Baro',s.pres.toFixed(0)+' hPa'],['Satellites',s.sats]];
+ $('rd').innerHTML=r.map(([a,b])=>`<div><span>${a}</span><b>${b}</b></div>`).join('')}
+function stats(){
+ const el=$('stats');if(!ok()){el.innerHTML='';return}
+ const mx=k=>D.reduce((m,d)=>Math.max(m,d[k]),-1e9);let dist=0,climb=0;const g=D.filter(d=>d.lat&&d.lon);
+ for(let i=1;i<g.length;i++){const R=6371000,r=Math.PI/180,dl=(g[i].lat-g[i-1].lat)*r,dn=(g[i].lon-g[i-1].lon)*r,
+  q=Math.sin(dl/2)**2+Math.cos(g[i].lat*r)*Math.cos(g[i-1].lat*r)*Math.sin(dn/2)**2;dist+=2*R*Math.asin(Math.sqrt(q))}
+ for(let i=5;i<D.length;i++)climb=Math.max(climb,(D[i].alt-D[i-5].alt)/((D[i].t-D[i-5].t)/1000||1));
+ const items=[[mx('alt').toFixed(1)+' m','Max altitude'],[mx('spd').toFixed(0)+' km/h','Max speed'],[mx('g').toFixed(2)+' g','Max G-force'],
+ [climb.toFixed(1)+' m/s','Max climb rate'],[mmss(T1-T0),'Flight time'],[(dist/1000).toFixed(2)+' km','GPS distance']];
+ el.innerHTML=items.map(([v,l])=>`<div><b>${v}</b><span>${l}</span></div>`).join('')}
+
+/* ---------- map ---------- */
+function initMap(){
+ if(!window.L){$('map').innerHTML='<canvas id="c-trk"></canvas>';$('follow').hidden=$('fit').hidden=true;return}
+ map=L.map('map',{zoomSnap:.5}).setView([25,0],2);
+ const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxNativeZoom:18,maxZoom:21,attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics'}).addTo(map);
+ const str=L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{subdomains:'abcd',maxNativeZoom:20,maxZoom:21,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'});
+ L.control.layers({Satellite:sat,Street:str},null,{collapsed:false}).addTo(map);L.control.scale({imperial:false}).addTo(map);
+ lFull=L.polyline([],{color:'#2f8cff',weight:2,opacity:.9,dashArray:'3 6'}).addTo(map);
+ lCase=L.polyline([],{color:'#0a1f44',weight:7,opacity:.85}).addTo(map);
+ lFlown=L.polyline([],{color:'#ffd23f',weight:3.5}).addTo(map);
+ mk=L.marker([0,0],{icon:L.divIcon({className:'plane',html:PLANE,iconSize:[40,40],iconAnchor:[20,20]}),interactive:false,zIndexOffset:1000});
+ map.on('dragstart',()=>setFollow(false))}
+function fit(){if(map&&pts.length>1)map.fitBounds(lFull.getBounds(),{padding:[40,40],maxZoom:19})}
+function mapLoad(){
+ pts=hasGps?D.filter(d=>d.lat&&d.lon).map(d=>[d.lat,d.lon]):[];if(!map)return;
+ lFull.setLatLngs(pts);setFollow(false);
+ if(pts.length>1){mk.addTo(map);fit()}else{mk.remove();lCase.setLatLngs([]);lFlown.setLatLngs([])}}
+function setFollow(v){follow=v;$('follow').setAttribute('aria-pressed',v);if(v&&map&&ok()&&hasGps){const s=at(playT);map.setView([s.pla,s.plo],Math.max(map.getZoom(),17))}}
+function mapDraw(s){
+ if(!map)return track(s);if(!s||!hasGps)return;
+ const pos=[s.pla,s.plo],fl=pts.slice(0,D[s.i].gi);fl.push(pos);
+ lCase.setLatLngs(fl);lFlown.setLatLngs(fl);mk.setLatLng(pos);
+ const el=mk.getElement();if(el&&el.firstChild)el.firstChild.style.transform='rotate('+s.hdg+'deg)';
+ if(follow)map.panTo(pos,{animate:false})}
+function track(s){ /* plain canvas fallback when the map library could not load */
+ const c=$('c-trk');if(!c)return;const r=c.getBoundingClientRect(),dp=devicePixelRatio||1,W=r.width,H=r.height;c.width=W*dp;c.height=H*dp;
+ const x=c.getContext('2d');x.setTransform(dp,0,0,dp,0,0);if(pts.length<2||!s)return;
+ const la=pts[0][0],lo0=pts[0][1],k=Math.cos(la*Math.PI/180),P=p=>[(p[1]-lo0)*k,p[0]-la];
+ let a=[1e9,1e9,-1e9,-1e9];pts.forEach(p=>{const[u,v]=P(p);a=[Math.min(a[0],u),Math.min(a[1],v),Math.max(a[2],u),Math.max(a[3],v)]});
+ const w=Math.max(a[2]-a[0],1e-7),h=Math.max(a[3]-a[1],1e-7),m=30,sc=Math.min((W-2*m)/w,(H-2*m)/h),ox=(W-w*sc)/2,oy=(H-h*sc)/2;
+ const S=p=>{const[u,v]=P(p);return[ox+(u-a[0])*sc,H-oy-(v-a[1])*sc]},line=(q,col,lw)=>{x.strokeStyle=col;x.lineWidth=lw;x.beginPath();q.forEach((p,i)=>{const[u,v]=S(p);i?x.lineTo(u,v):x.moveTo(u,v)});x.stroke()};
+ const pos=[s.pla,s.plo],fl=pts.slice(0,D[s.i].gi);fl.push(pos);
+ line(pts,css('--line'),2);line(fl,css('--c1'),3);
+ const[u,v]=S(pos);x.save();x.translate(u,v);x.rotate(s.hdg*Math.PI/180);x.fillStyle=css('--hi');x.strokeStyle=css('--ink');x.lineWidth=1.5;
+ x.beginPath();x.moveTo(0,-12);x.lineTo(9,10);x.lineTo(0,5);x.lineTo(-9,10);x.closePath();x.fill();x.stroke();x.restore();
+ x.fillStyle=css('--mute');x.font='12px '+css('--font');x.fillText('N ↑  (map tiles unavailable, showing plain track)',10,18)}
+
+/* ---------- playback ---------- */
+function draw(){
+ const s=ok()?at(playT):null;
+ CH.forEach(([id,ser,dp])=>chart(id,ser,dp,s));horizon(s);readouts(s);mapDraw(s);
+ $('scrub').value=playT-T0;$('clock').textContent=mmss(playT-T0)+' / '+mmss(T1-T0)}
+function setPlay(v){playing=v;const b=$('play');b.innerHTML=v?PAUSE:PLAY;b.setAttribute('aria-label',v?'Pause':'Play')}
+function stop(){cancelAnimationFrame(raf);setPlay(false)}
+function tick(now){
+ if(!playing)return;playT+=Math.min(now-last,100)*rate;last=now;
+ if(playT>=T1){playT=T1;setPlay(false)}draw();if(playing)raf=requestAnimationFrame(tick)}
+function toggle(){
+ if(!ok()){st('Load a flight first: request the log, open a CSV, or run the demo');return}
+ if(playing)return stop();if(playT>=T1)playT=T0;setPlay(true);last=performance.now();raf=requestAnimationFrame(tick)}
+function seek(t){if(!ok())return;playT=Math.max(T0,Math.min(T1,t));draw()}
+$('play').onclick=toggle;
+$('scrub').oninput=e=>seek(T0+ +e.target.value);
+$('rate').onchange=e=>rate=+e.target.value;
+$('follow').onclick=()=>setFollow(!follow);
+$('fit').onclick=()=>{setFollow(false);fit()};
+CH.forEach(([id])=>{const c=$(id),f=e=>{if(!ok()||(e.type=='pointermove'&&!e.buttons))return;const r=c.getBoundingClientRect();seek(T0+(e.clientX-r.left-PL)/(r.width-PL-PR)*(T1-T0))};c.onpointerdown=f;c.onpointermove=f});
+addEventListener('keydown',e=>{if(/INPUT|SELECT|BUTTON|TEXTAREA/.test(e.target.tagName))return;
+ if(e.code=='Space'){e.preventDefault();toggle()}else if(e.code=='ArrowRight')seek(playT+2000)
+ else if(e.code=='ArrowLeft')seek(playT-2000)});
+
+/* ---------- data sources ---------- */
+$('btn-conn').onclick=()=>{
+ if(!window.mqtt){st('MQTT library did not load. Check your internet connection');return}
+ if(cl)cl.end(true);const topic=$('topic').value.trim();st('Connecting…');
+ cl=mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+ cl.on('connect',()=>{cl.subscribe(topic+'/#');st('Connected. Waiting for the plane')});
+ cl.on('error',e=>st('Error: '+e.message));cl.on('offline',()=>st('Offline'));
+ cl.on('message',(t,m)=>{const s=m.toString();
+  if(t.endsWith('/status')){if(s.startsWith('start')){stop();D=[];st('Receiving flight log…')}else if(s=='end')loaded('Flight log received: '+D.length+' samples. Press play')
+   else st('Plane: '+s)}
+  else if(t.endsWith('/log')){parse(s);st('Receiving… '+D.length+' samples')}})};
+$('btn-req').onclick=()=>{if(!cl||!cl.connected){st('Connect first');return}cl.publish($('topic').value.trim()+'/cmd','send');st('Requested log. The plane must be online')};
+$('btn-csv').onclick=()=>{if(!D.length){st('Nothing to export yet');return}
+ const csv=F.join(',')+'\n'+D.map(d=>F.map(k=>d[k]).join(',')).join('\n'),a=document.createElement('a');
+ a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='flight_log.csv';a.click()};
+$('btn-load').onclick=()=>$('file').click();
+$('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;D=[];parse(await f.text());e.target.value='';
+ loaded(ok()?'Opened '+f.name+': '+D.length+' samples. Press play':'No flight samples found in '+f.name)};
+$('btn-demo').onclick=()=>{D=[];
+ for(let i=0;i<600;i++){const t=i/5,ph=t/25,roll=-25-8*Math.sin(ph*2),pitch=8*Math.cos(Math.min(t/120,1)*Math.PI)+2*Math.sin(t),r=roll*Math.PI/180,p=pitch*Math.PI/180,
+  alt=Math.max(0,Math.sin(Math.min(t/120,1)*Math.PI)*120+Math.sin(t/3)*3),gl=1/Math.cos(r)+(Math.random()-.5)*.06,
+  hdg=(Math.atan2(-.004*Math.cos(40*Math.PI/180)*Math.sin(ph),.0025*Math.cos(ph))*180/Math.PI+360)%360,o={t:t*1000,alt,pres:1013-alt*.12,temp:22-alt*.0065+Math.random()*.1,
+  ax:Math.sin(p)*gl,ay:Math.sin(r)*Math.cos(p)*gl,az:Math.cos(r)*Math.cos(p)*gl,pitch,roll,lat:40+.0025*Math.sin(ph),lon:-100+.004*Math.cos(ph),
+  spd:55+15*Math.sin(t/9)+Math.random(),hdg,sats:9};o.g=Math.hypot(o.ax,o.ay,o.az);D.push(o)}
+ loaded('Demo flight (simulated data). Press play')};
+let rz=0;addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>{dirty();draw()},80)});
+matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>{dirty();draw()});
+setPlay(false);initMap();loaded();
+</script></body></html>
